@@ -1,0 +1,10 @@
+FAIL
+Kernel panic in run: PANIC at ../../tests/threads/tests.c:93 in fail(): test failed
+Call stack: 0xc0107991 0xc01098dd 0xc010b722 0xc0109920 0xc010073c 0xc01006c7
+Translation of call stack:
+0xc0107991: debug_panic (.../../lib/kernel/debug.c:37)
+0xc01098dd: run_test (.../tests/threads/tests.c:48)
+0xc010b722: test_mlfqs_load_1 (...threads/mlfqs-load-1.c:41)
+0xc0109920: run_test (.../tests/threads/tests.c:57)
+0xc010073c: run_task (.../../../threads/init.c:289)
+0xc01006c7: run_actions (.../../../threads/init.c:338)

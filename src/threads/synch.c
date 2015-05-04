@@ -204,6 +204,9 @@ void sema_down(struct semaphore *sema) {
          * list_push_back(&sema -> waiters, &thread_current() -> elem);
          * thread_block();
          */
+
+        donate_priority();
+
         list_insert_ordered(
                 &sema -> waiters,
                 &thread_current() -> elem,
@@ -272,7 +275,27 @@ void lock_acquire(struct lock *lock) {
 
     enum intr_level old_level = intr_disable();
 
+    /* 如果lock已经被持有 */
+    if (lock -> holder) {
+        /* 设置当前线程正在等待的lock */
+        thread_current() -> wait_on_lock = lock;
+        /* 记住按照优先级降序插入到持有lock的线程的donation_list中 */
+        list_insert_ordered(
+                &lock -> holder -> donation_list,
+                &thread_current() -> donation_list_elem,
+                (list_less_func *) &cmp_priority,
+                NULL
+        );
+    }
     sema_down(&lock -> semaphore);
+
+    /*
+     * 如果能进行的到这一步，
+     * 说明此时lock还没有被任何线程所获取，
+     * 如果lock已经被某个线程获取，
+     * 那么其余的线程在申请这个lock的时候就会因为上面的sema_down()函数而阻塞
+     */
+    thread_current() -> wait_on_lock = NULL;
     lock -> holder = thread_current();
 
     intr_set_level(old_level);
@@ -294,6 +317,9 @@ bool lock_try_acquire(struct lock *lock) {
 
     success = sema_try_down(&lock -> semaphore);
     if (success) {
+        /* 注意设置wait_on_lock */
+        thread_current() -> wait_on_lock = NULL;
+
         lock -> holder = thread_current();
     }
 
@@ -311,9 +337,19 @@ void lock_release(struct lock *lock) {
     ASSERT(lock != NULL);
     ASSERT(lock_held_by_current_thread(lock));
 
+    /*
+     * 注释掉原有的代码
+     * lock -> holder = NULL;
+     * sema_up(&lock -> semaphore);
+     */
+
     enum intr_level old_level = intr_disable();
 
     lock -> holder = NULL;
+
+    remove_with_lock(lock);
+    refresh_priority();
+
     sema_up(&lock -> semaphore);
 
     intr_set_level(old_level);

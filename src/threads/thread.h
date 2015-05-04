@@ -147,7 +147,11 @@ struct thread
     struct list donation_list;
     struct list_elem donation_list_elem;
     int init_priority;
-	int64_t ticks;
+    int64_t ticks;
+
+    /* MLFQS用到的自定义部分 */
+    int nice;
+    int recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -212,5 +216,23 @@ bool cmp_priority (
 
 /* 判断设置优先级过后，当前线程是否应该放弃对CPU的占用 */
 void test_yield(void);
+
+void calculate_load_avg(void);
+void calculate_recent_cpu(struct thread *t);
+void calculate_mlfqs_priority(struct thread *t);
+void recent_cpu_increment(void);
+void update_recent_cpu_and_load_avg(void);
+
+int int_to_fp(int n);
+int fp_to_int_round_zero(int x);
+int fp_to_int_round_nearest(int x);
+int fp_add(int x, int y);
+int fp_sub(int x, int y);
+int fp_add_int(int x, int n);
+int fp_sub_int(int x, int n);
+int fp_mul(int x, int y);
+int fp_div(int x, int y);
+int fp_mul_int(int x, int n);
+int fp_div_int(int x, int n);
 
 #endif /* threads/thread.h */

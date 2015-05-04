@@ -59,6 +59,41 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
 
+/*
+ * 17.14定点数格式化用到的设置，
+ * 在这里我们使用的是“位运算”取数，
+ * 其实我们正常使用乘法也可以；
+ * 不过处于性能的考虑，
+ * 使用位运算的速度仍然要快于乘法
+ *
+ * F用于17.14定点数的格式化，十进制数值为16384
+ * INT_MAX为在17.14定点数格式下可以表示到的最大整数，十进制数值为2147483647
+ * INT_MIN为在17.14定点数格式下可以表示到的最小整数，十进制数值为-2147483648
+ *
+ * #define F (1 << 14)
+ * #define INT_MAX ((1 << 31) -1)
+ * #define INT_MIN (-(1 << 31))
+ */
+#define F (1 << 14)
+
+/* 定义nice值 */
+#define NICE_DEFAULT 0
+#define NICE_MAX 20
+#define NICE_MIN -20
+
+/* 定义recent_cpu的默认值 */
+#define RECENT_CPU_DEFAULT 0
+
+/* 定义load_avg的初始值 */
+#define LOAD_AVG_DEFAULT 0
+
+/*
+ * 定义系统全局的load_avg，
+ * 也许没有必要使用static，
+ * 不过我觉得用不用static在这里都一样
+ */
+int load_avg;
+
 static void kernel_thread (thread_func *, void *aux);
 
 static void idle (void *aux UNUSED);
@@ -134,9 +169,13 @@ thread_tick (void)
   else
     kernel_ticks++;
 
-  /* Enforce preemption. */
-  if (++thread_ticks >= TIME_SLICE)
-    intr_yield_on_return ();
+    /*
+     * 把原有的代码注释掉
+     * Enforce preemption.
+     * if (++thread_ticks >= TIME_SLICE) {
+     *     intr_yield_on_return ();
+     * }
+     */
 }
 
 /* Prints thread statistics. */
@@ -147,293 +186,6 @@ thread_print_stats (void)
           idle_ticks, kernel_ticks, user_ticks);
 }
 
-/* Returns the name of the running thread. */
-const char *
-thread_name (void) 
-{
-  return thread_current ()->name;
-}
-
-/* Returns the running thread.
-   This is running_thread() plus a couple of sanity checks.
-   See the big comment at the top of thread.h for details. */
-struct thread *
-thread_current (void) 
-{
-  struct thread *t = running_thread ();
-  
-  /* Make sure T is really a thread.
-     If either of these assertions fire, then your thread may
-     have overflowed its stack.  Each thread has less than 4 kB
-     of stack, so a few big automatic arrays or moderate
-     recursion can cause stack overflow. */
-  ASSERT (is_thread (t));
-  ASSERT (t->status == THREAD_RUNNING);
-
-  return t;
-}
-
-/* Returns the running thread's tid. */
-tid_t
-thread_tid (void) 
-{
-  return thread_current ()->tid;
-}
-
-/* Deschedules the current thread and destroys it.  Never
-   returns to the caller. */
-void
-thread_exit (void) 
-{
-  ASSERT (!intr_context ());
-
-#ifdef USERPROG
-  process_exit ();
-#endif
-
-  /* Remove thread from all threads list, set our status to dying,
-     and schedule another process.  That process will destroy us
-     when it call schedule_tail(). */
-  intr_disable ();
-  list_remove (&thread_current()->allelem);
-  thread_current ()->status = THREAD_DYING;
-  schedule ();
-  NOT_REACHED ();
-}
-
-/* Invoke function 'func' on all threads, passing along 'aux'.
-   This function must be called with interrupts off. */
-void
-thread_foreach (thread_action_func *func, void *aux)
-{
-  struct list_elem *e;
-
-  ASSERT (intr_get_level () == INTR_OFF);
-
-  for (e = list_begin (&all_list); e != list_end (&all_list);
-       e = list_next (e))
-    {
-      struct thread *t = list_entry (e, struct thread, allelem);
-      func (t, aux);
-    }
-}
-
-/* Sets the current thread's nice value to NICE. */
-void
-thread_set_nice (int nice UNUSED) 
-{
-  /* Not yet implemented. */
-}
-
-/* Returns the current thread's nice value. */
-int
-thread_get_nice (void) 
-{
-  /* Not yet implemented. */
-  return 0;
-}
-
-/* Returns 100 times the system load average. */
-int
-thread_get_load_avg (void) 
-{
-  /* Not yet implemented. */
-  return 0;
-}
-
-/* Returns 100 times the current thread's recent_cpu value. */
-int
-thread_get_recent_cpu (void) 
-{
-  /* Not yet implemented. */
-  return 0;
-}
-
-/* Idle thread.  Executes when no other thread is ready to run.
-
-   The idle thread is initially put on the ready list by
-   thread_start().  It will be scheduled once initially, at which
-   point it initializes idle_thread, "up"s the semaphore passed
-   to it to enable thread_start() to continue, and immediately
-   blocks.  After that, the idle thread never appears in the
-   ready list.  It is returned by next_thread_to_run() as a
-   special case when the ready list is empty. */
-static void
-idle (void *idle_started_ UNUSED) 
-{
-  struct semaphore *idle_started = idle_started_;
-  idle_thread = thread_current ();
-  sema_up (idle_started);
-
-  for (;;) 
-    {
-      /* Let someone else run. */
-      intr_disable ();
-      thread_block ();
-
-      /* Re-enable interrupts and wait for the next one.
-
-         The `sti' instruction disables interrupts until the
-         completion of the next instruction, so these two
-         instructions are executed atomically.  This atomicity is
-         important; otherwise, an interrupt could be handled
-         between re-enabling interrupts and waiting for the next
-         one to occur, wasting as much as one clock tick worth of
-         time.
-
-         See [IA32-v2a] "HLT", [IA32-v2b] "STI", and [IA32-v3a]
-         7.11.1 "HLT Instruction". */
-      asm volatile ("sti; hlt" : : : "memory");
-    }
-}
-
-/* Function used as the basis for a kernel thread. */
-static void
-kernel_thread (thread_func *function, void *aux) 
-{
-  ASSERT (function != NULL);
-
-  intr_enable ();       /* The scheduler runs with interrupts off. */
-  function (aux);       /* Execute the thread function. */
-  thread_exit ();       /* If function() returns, kill the thread. */
-}
-
-/* Returns the running thread. */
-struct thread *
-running_thread (void) 
-{
-  uint32_t *esp;
-
-  /* Copy the CPU's stack pointer into `esp', and then round that
-     down to the start of a page.  Because `struct thread' is
-     always at the beginning of a page and the stack pointer is
-     somewhere in the middle, this locates the curent thread. */
-  asm ("mov %%esp, %0" : "=g" (esp));
-  return pg_round_down (esp);
-}
-
-/* Returns true if T appears to point to a valid thread. */
-static bool
-is_thread (struct thread *t)
-{
-  return t != NULL && t->magic == THREAD_MAGIC;
-}
-
-/* Allocates a SIZE-byte frame at the top of thread T's stack and
-   returns a pointer to the frame's base. */
-static void *
-alloc_frame (struct thread *t, size_t size) 
-{
-  /* Stack data is always allocated in word-size units. */
-  ASSERT (is_thread (t));
-  ASSERT (size % sizeof (uint32_t) == 0);
-
-  t->stack -= size;
-  return t->stack;
-}
-
-/* Chooses and returns the next thread to be scheduled.  Should
-   return a thread from the run queue, unless the run queue is
-   empty.  (If the running thread can continue running, then it
-   will be in the run queue.)  If the run queue is empty, return
-   idle_thread. */
-static struct thread *
-next_thread_to_run (void) 
-{
-  if (list_empty (&ready_list))
-    return idle_thread;
-  else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
-}
-
-/* Completes a thread switch by activating the new thread's page
-   tables, and, if the previous thread is dying, destroying it.
-
-   At this function's invocation, we just switched from thread
-   PREV, the new thread is already running, and interrupts are
-   still disabled.  This function is normally invoked by
-   thread_schedule() as its final action before returning, but
-   the first time a thread is scheduled it is called by
-   switch_entry() (see switch.S).
-
-   It's not safe to call printf() until the thread switch is
-   complete.  In practice that means that printf()s should be
-   added at the end of the function.
-
-   After this function and its caller returns, the thread switch
-   is complete. */
-void
-schedule_tail (struct thread *prev) 
-{
-  struct thread *cur = running_thread ();
-  
-  ASSERT (intr_get_level () == INTR_OFF);
-
-  /* Mark us as running. */
-  cur->status = THREAD_RUNNING;
-
-  /* Start new time slice. */
-  thread_ticks = 0;
-
-#ifdef USERPROG
-  /* Activate the new address space. */
-  process_activate ();
-#endif
-
-  /* If the thread we switched from is dying, destroy its struct
-     thread.  This must happen late so that thread_exit() doesn't
-     pull out the rug under itself.  (We don't free
-     initial_thread because its memory was not obtained via
-     palloc().) */
-  if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
-    {
-      ASSERT (prev != cur);
-      palloc_free_page (prev);
-    }
-}
-
-/* Schedules a new process.  At entry, interrupts must be off and
-   the running process's state must have been changed from
-   running to some other state.  This function finds another
-   thread to run and switches to it.
-
-   It's not safe to call printf() until schedule_tail() has
-   completed. */
-static void
-schedule (void) 
-{
-  struct thread *cur = running_thread ();
-  struct thread *next = next_thread_to_run ();
-  struct thread *prev = NULL;
-
-  ASSERT (intr_get_level () == INTR_OFF);
-  ASSERT (cur->status != THREAD_RUNNING);
-  ASSERT (is_thread (next));
-
-  if (cur != next)
-    prev = switch_threads (cur, next);
-  schedule_tail (prev); 
-}
-
-/* Returns a tid to use for a new thread. */
-static tid_t
-allocate_tid (void) 
-{
-  static tid_t next_tid = 1;
-  tid_t tid;
-
-  lock_acquire (&tid_lock);
-  tid = next_tid++;
-  lock_release (&tid_lock);
-
-  return tid;
-}
-
-/* Offset of `stack' member within `struct thread'.
-   Used by switch.S, which can't figure it out on its own. */
-uint32_t thread_stack_ofs = offsetof (struct thread, stack);
-
-/* 以下为为对源码的自定义部分或者修改部分 */
 
 /* Creates a new kernel thread named NAME with the given initial
  *  PRIORITY, which executes FUNCTION passing AUX as the argument,
@@ -566,6 +318,61 @@ void thread_unblock(struct thread *t) {
     intr_set_level(old_level);
 }
 
+/* Returns the name of the running thread. */
+const char *
+thread_name (void) 
+{
+  return thread_current ()->name;
+}
+
+/* Returns the running thread.
+   This is running_thread() plus a couple of sanity checks.
+   See the big comment at the top of thread.h for details. */
+struct thread *
+thread_current (void) 
+{
+  struct thread *t = running_thread ();
+  
+  /* Make sure T is really a thread.
+     If either of these assertions fire, then your thread may
+     have overflowed its stack.  Each thread has less than 4 kB
+     of stack, so a few big automatic arrays or moderate
+     recursion can cause stack overflow. */
+  ASSERT (is_thread (t));
+  ASSERT (t->status == THREAD_RUNNING);
+
+  return t;
+}
+
+/* Returns the running thread's tid. */
+tid_t
+thread_tid (void) 
+{
+  return thread_current ()->tid;
+}
+
+/* Deschedules the current thread and destroys it.  Never
+   returns to the caller. */
+void
+thread_exit (void) 
+{
+  ASSERT (!intr_context ());
+
+#ifdef USERPROG
+  process_exit ();
+#endif
+
+  /* Remove thread from all threads list, set our status to dying,
+     and schedule another process.  That process will destroy us
+     when it call schedule_tail(). */
+  intr_disable ();
+  list_remove (&thread_current()->allelem);
+  thread_current ()->status = THREAD_DYING;
+  schedule ();
+  NOT_REACHED ();
+}
+
+
 /* Yields the CPU.  The current thread is not put to sleep and
  *  may be scheduled again immediately at the scheduler's whim. */
 void thread_yield(void) {
@@ -592,6 +399,26 @@ void thread_yield(void) {
     intr_set_level(old_level);
 }
 
+/* Invoke function 'func' on all threads, passing along 'aux'.
+   This function must be called with interrupts off. */
+void
+thread_foreach (thread_action_func *func, void *aux)
+{
+  struct list_elem *e;
+
+  ASSERT (intr_get_level () == INTR_OFF);
+
+  for (e = list_begin (&all_list); e != list_end (&all_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, allelem);
+      func (t, aux);
+    }
+}
+
+
+
+/* 以下为为对源码的自定义部分或者修改部分 */
 /* Sets the current thread's priority to NEW_PRIORITY. */
 void thread_set_priority(int new_priority) {
     /*
@@ -628,7 +455,6 @@ void thread_set_priority(int new_priority) {
     }
     intr_set_level(old_level);
 }
-
 /* Returns the current thread's priority. */
 int thread_get_priority(void) {
     enum intr_level old_level = intr_disable();
@@ -637,6 +463,120 @@ int thread_get_priority(void) {
     return tmp;
 }
 
+/* Sets the current thread's nice value to NICE. */
+void thread_set_nice(int nice) {
+    enum intr_level old_level = intr_disable();
+    thread_current() -> nice = nice;
+    /*
+     * 然后需要计算线程的优先级，
+     * 如果当前线程不再具有最高的优先级了，
+     * 把它yield
+     */
+    calculate_mlfqs_priority(thread_current());
+    test_yield();
+    intr_set_level(old_level);
+}
+
+/* Returns the current thread's nice value. */
+int thread_get_nice(void) {
+    enum intr_level old_level = intr_disable ();
+    int temp = thread_current() -> nice;
+    intr_set_level(old_level);
+
+    return temp;
+}
+
+/* Returns 100 times the system load average. */
+int thread_get_load_avg(void) {
+    enum intr_level old_level = intr_disable();
+    int temp = fp_to_int_round_nearest(
+            fp_mul_int(load_avg, 100)
+    );
+    intr_set_level(old_level);
+
+    return temp;
+}
+
+/* Returns 100 times the current thread's recent_cpu value. */
+int thread_get_recent_cpu(void) {
+    enum intr_level old_level = intr_disable();
+    int temp = fp_to_int_round_nearest(
+            fp_mul_int(thread_current() -> recent_cpu, 100)
+    );
+    intr_set_level(old_level);
+
+    return temp;
+}
+
+/* Idle thread.  Executes when no other thread is ready to run.
+
+   The idle thread is initially put on the ready list by
+   thread_start().  It will be scheduled once initially, at which
+   point it initializes idle_thread, "up"s the semaphore passed
+   to it to enable thread_start() to continue, and immediately
+   blocks.  After that, the idle thread never appears in the
+   ready list.  It is returned by next_thread_to_run() as a
+   special case when the ready list is empty. */
+static void
+idle (void *idle_started_ UNUSED) 
+{
+  struct semaphore *idle_started = idle_started_;
+  idle_thread = thread_current ();
+  sema_up (idle_started);
+
+  for (;;) 
+    {
+      /* Let someone else run. */
+      intr_disable ();
+      thread_block ();
+
+      /* Re-enable interrupts and wait for the next one.
+
+         The `sti' instruction disables interrupts until the
+         completion of the next instruction, so these two
+         instructions are executed atomically.  This atomicity is
+         important; otherwise, an interrupt could be handled
+         between re-enabling interrupts and waiting for the next
+         one to occur, wasting as much as one clock tick worth of
+         time.
+
+         See [IA32-v2a] "HLT", [IA32-v2b] "STI", and [IA32-v3a]
+         7.11.1 "HLT Instruction". */
+      asm volatile ("sti; hlt" : : : "memory");
+    }
+}
+
+/* Function used as the basis for a kernel thread. */
+static void
+kernel_thread (thread_func *function, void *aux) 
+{
+  ASSERT (function != NULL);
+
+  intr_enable ();       /* The scheduler runs with interrupts off. */
+  function (aux);       /* Execute the thread function. */
+  thread_exit ();       /* If function() returns, kill the thread. */
+}
+
+/* Returns the running thread. */
+struct thread *
+running_thread (void) 
+{
+  uint32_t *esp;
+
+  /* Copy the CPU's stack pointer into `esp', and then round that
+     down to the start of a page.  Because `struct thread' is
+     always at the beginning of a page and the stack pointer is
+     somewhere in the middle, this locates the curent thread. */
+  asm ("mov %%esp, %0" : "=g" (esp));
+  return pg_round_down (esp);
+}
+
+/* Returns true if T appears to point to a valid thread. */
+static bool
+is_thread (struct thread *t)
+{
+  return t != NULL && t->magic == THREAD_MAGIC;
+}
 /* Does basic initialization of T as a blocked thread named NAME. */
 static void init_thread(struct thread *t, const char *name, int priority) {
     ASSERT(t != NULL);
@@ -759,6 +699,121 @@ void remove_with_lock(struct lock *lock) {
     }
 }
 
+/* Allocates a SIZE-byte frame at the top of thread T's stack and
+   returns a pointer to the frame's base. */
+static void *
+alloc_frame (struct thread *t, size_t size) 
+{
+  /* Stack data is always allocated in word-size units. */
+  ASSERT (is_thread (t));
+  ASSERT (size % sizeof (uint32_t) == 0);
+
+  t->stack -= size;
+  return t->stack;
+}
+
+/* Chooses and returns the next thread to be scheduled.  Should
+   return a thread from the run queue, unless the run queue is
+   empty.  (If the running thread can continue running, then it
+   will be in the run queue.)  If the run queue is empty, return
+   idle_thread. */
+static struct thread *
+next_thread_to_run (void) 
+{
+  if (list_empty (&ready_list))
+    return idle_thread;
+  else
+    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+}
+
+/* Completes a thread switch by activating the new thread's page
+   tables, and, if the previous thread is dying, destroying it.
+
+   At this function's invocation, we just switched from thread
+   PREV, the new thread is already running, and interrupts are
+   still disabled.  This function is normally invoked by
+   thread_schedule() as its final action before returning, but
+   the first time a thread is scheduled it is called by
+   switch_entry() (see switch.S).
+
+   It's not safe to call printf() until the thread switch is
+   complete.  In practice that means that printf()s should be
+   added at the end of the function.
+
+   After this function and its caller returns, the thread switch
+   is complete. */
+void
+schedule_tail (struct thread *prev) 
+{
+  struct thread *cur = running_thread ();
+  
+  ASSERT (intr_get_level () == INTR_OFF);
+
+  /* Mark us as running. */
+  cur->status = THREAD_RUNNING;
+
+  /* Start new time slice. */
+  thread_ticks = 0;
+
+#ifdef USERPROG
+  /* Activate the new address space. */
+  process_activate ();
+#endif
+
+  /* If the thread we switched from is dying, destroy its struct
+     thread.  This must happen late so that thread_exit() doesn't
+     pull out the rug under itself.  (We don't free
+     initial_thread because its memory was not obtained via
+     palloc().) */
+  if (prev != NULL && prev->status == THREAD_DYING && prev != initial_thread) 
+    {
+      ASSERT (prev != cur);
+      palloc_free_page (prev);
+    }
+}
+
+/* Schedules a new process.  At entry, interrupts must be off and
+   the running process's state must have been changed from
+   running to some other state.  This function finds another
+   thread to run and switches to it.
+
+   It's not safe to call printf() until schedule_tail() has
+   completed. */
+static void
+schedule (void) 
+{
+  struct thread *cur = running_thread ();
+  struct thread *next = next_thread_to_run ();
+  struct thread *prev = NULL;
+
+  ASSERT (intr_get_level () == INTR_OFF);
+  ASSERT (cur->status != THREAD_RUNNING);
+  ASSERT (is_thread (next));
+
+  if (cur != next)
+    prev = switch_threads (cur, next);
+  schedule_tail (prev); 
+}
+
+/* Returns a tid to use for a new thread. */
+static tid_t
+allocate_tid (void) 
+{
+  static tid_t next_tid = 1;
+  tid_t tid;
+
+  lock_acquire (&tid_lock);
+  tid = next_tid++;
+  lock_release (&tid_lock);
+
+  return tid;
+}
+
+/* Offset of `stack' member within `struct thread'.
+   Used by switch.S, which can't figure it out on its own. */
+uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+
 /* 对优先级进行降序 */
 bool cmp_priority (
     const struct list_elem *a,
@@ -787,7 +842,186 @@ void test_yield(void) {
             elem
     );
 
+    /*
+     * 处于外部中断的情况下，
+     * 如果当前线程的不再具有最高的优先级，
+     * 或者它的时间片用完了，
+     * 则应当在中断返回的时候立即释放资源。
+     * 为什么要这样做呢？
+     * 我们可以这样理解，
+     * 假设有一台打印机正在打印东西，
+     * 此时有一个优先级更高的线程请求占用打印机，
+     * 那么我们正在打印的东西是不是就应该立即停止的呢？
+     * 当然不是啦，
+     * 我们应该让当前正在打印的东西打印完毕，
+     * 然后才会去相应更高优先级的线程，
+     * 所以是在中断返回的时候才释放资源啦
+     *
+     * 注意thread_tick()函数也许起着相同的作用，
+     * 有必要的话可以把这几行代码注释掉
+     */
+    if(intr_context()) {
+        thread_ticks++; // ？
+        if(
+                thread_current() -> priority < t -> priority ||
+                (thread_ticks >= TIME_SLICE &&
+                thread_current() -> priority == t -> priority)
+        ) {
+            intr_yield_on_return();
+        }
+        return;
+    }
+
     if ((thread_current() -> priority) < t -> priority) {
         thread_yield();
     }
+}
+
+/* 用于计算load_avg */
+void calculate_load_avg(void) {
+    int length = 0;
+    int temp_59 = 0;
+    int temp_1 = 0;
+
+    length = list_size(&ready_list);
+    if (thread_current() != idle_thread) {
+        length++;
+    }
+
+    /* 注意全部先转换成定点数计算出相应值，然后在换算成对应的整数 */
+    temp_59 = fp_div(int_to_fp(59) ,int_to_fp(60));
+    temp_1 = fp_div(int_to_fp(1), int_to_fp(60));
+    load_avg = fp_mul(temp_59, load_avg) + fp_mul_int(temp_1, length);
+}
+
+/* 用于计算线程的recent_cpu */
+void calculate_recent_cpu(struct thread *t) {
+    int temp_mem = 0;
+    int temp_den = 0;
+    int temp_con = 0;
+    int temp_pro = 0;
+
+    if (t == idle_thread) {
+        return;
+    }
+
+    /* 注意全部先转换成定点数计算出相应值，然后在换算成对应的整数 */
+    temp_mem = fp_mul_int(load_avg, 2);
+    temp_den = fp_add_int(temp_mem, 1);
+    temp_con = fp_div(temp_mem, temp_den);
+    temp_pro = fp_mul(temp_con, t -> recent_cpu);
+    t -> recent_cpu = fp_add_int(temp_pro, t -> nice);
+}
+
+/* 用于计算多级反馈队列调度算法情况下，每个线程的优先级 */
+void calculate_mlfqs_priority(struct thread *t) {
+    int temp_con = 0;
+    int temp_pro = 0;
+    int temp_dif = 0;
+
+    if (t == idle_thread) {
+        return;
+    }
+
+    /* 注意全部先转换成定点数计算出相应值，然后在换算成对应的整数 */
+    temp_con = fp_div(t -> recent_cpu, int_to_fp(4));
+    temp_pro = fp_mul(int_to_fp(t -> nice), int_to_fp(2));
+    temp_dif = fp_sub(int_to_fp(PRI_MAX), temp_con);
+    temp_dif = fp_sub(temp_dif, temp_pro);
+    /* priority必然需要转换为对应的整数 */
+    t -> priority = fp_to_int_round_zero(temp_dif);
+
+    /* 保证计算出的线程优先级在限制范围内 */
+    if (t -> priority < PRI_MIN) {
+        t -> priority = PRI_MIN;
+    }
+    if (t -> priority > PRI_MAX) {
+        t -> priority = PRI_MAX;
+    }
+}
+
+/* 用于线程recent_cpu的自增运算 */
+void recent_cpu_increment(void) {
+    if (thread_current() == idle_thread) {
+        return;
+    }
+
+    thread_current() -> recent_cpu = fp_add(
+            thread_current() -> recent_cpu,
+            int_to_fp(1)
+    );
+}
+
+/* 更新recent_cpu和load_avg */
+void update_recent_cpu_and_load_avg(void) {
+    struct list_elem *e;
+
+    for (
+            e = list_begin(&all_list);
+            e != list_end(&all_list);
+            e = list_next(e)
+    ) {
+        struct thread *t = list_entry(e, struct thread, allelem);
+        calculate_recent_cpu(t);
+        calculate_mlfqs_priority(t);
+    }
+}
+
+/* 整数格式化为定点数 */
+int int_to_fp(int n) {
+    return n * F;
+}
+
+/* 定点数转化为整数（舍入到0） */
+int fp_to_int_round_zero(int x) {
+    return x / F;
+}
+
+/* 定点数转化为整数（四舍五入到最近的） */
+int fp_to_int_round_nearest(int x) {
+    if (x >= 0) {
+        return (x + F / 2) / F;
+    } else {
+        return (x - F / 2) / F;
+    }
+}
+
+/* 两个定点数相加 */
+int fp_add(int x, int y) {
+    return x + y;
+}
+
+/* 两个定点数相减 */
+int fp_sub(int x, int y) {
+    return x - y;
+}
+
+/* 整数与定点数相加 */
+int fp_add_int(int x, int n) {
+    return x + n * F;
+}
+
+/* 整数减定点数 */
+int fp_sub_int(int x, int n) {
+    return x - n * F;
+}
+
+/* 两个定点数相乘 */
+int fp_mul(int x, int y) {
+    return ((int64_t) x) * y / F;
+}
+
+/* 两个定点数相除 */
+int fp_div(int x, int y) {
+    return ((int64_t) x) * F / y;
+}
+
+/* 定点数与整数相乘 */
+int fp_mul_int(int x, int n) {
+    return x * n;
+}
+
+/* 定点数除以整数 */
+int fp_div_int(int x, int n) {
+    return x / n;
 }

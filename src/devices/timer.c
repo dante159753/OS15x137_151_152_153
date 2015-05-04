@@ -17,6 +17,9 @@
 #error TIMER_FREQ <= 1000 recommended
 #endif
 
+/* 定义更新的时钟周期 */
+#define UPDATE_FREQ 4
+
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
@@ -300,6 +303,18 @@ static void timer_interrupt(struct intr_frame *args UNUSED) {
     Thus, this function runs in an external interrupt context. */
     thread_tick ();
 
+    /* 如果是MLFQS情况下 */
+    if (thread_mlfqs) {
+        recent_cpu_increment();
+        if (ticks % TIMER_FREQ == 0) {
+            calculate_load_avg();
+            update_recent_cpu_and_load_avg();
+        }
+        if (ticks % UPDATE_FREQ == 0) {
+            calculate_mlfqs_priority(thread_current());
+        }
+    }
+
     /*
     * 接下来我们可以开始自定义了；
     * 在这里我们理解为，用于计算ticks的进程（或线程）是一直都存在的，
@@ -328,4 +343,6 @@ static void timer_interrupt(struct intr_frame *args UNUSED) {
         thread_unblock(t);
         temp_elem = list_begin(&sleep_list);
     }
+
+    test_yield();
 }

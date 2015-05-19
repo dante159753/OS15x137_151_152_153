@@ -1,0 +1,288 @@
+			+--------------------+
+			|        CS 140      |
+			| PROJECT 1: THREADS |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+				   
+---- GROUP ----
+
+王彦朝	10132510151
+尹学振	10132510152
+祝朝凡	10132510153
+程栋	10132510137
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+- In thread.h, added variable to thread struct:
+
+  int64_t ticks_blocked;
+
+If a thread is sleeping, ticks indicate the tick value when the thread is
+done sleeping and ready to be unblocked.
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+In timer_sleep:
+1) 检查设置的sleep时间有效
+2) 设置线程的ticks_blocked
+3) 阻塞线程
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+让队列有序，直接从队头取出的就是需要执行的，不需要便利队列寻找需要执行的线程
+
+---- SYNCHRONIZATION ----
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+
+在处理过程中屏蔽中断
+
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+可以很好的解决忙等待的问题，且无需额外的数据结构
+
+			 PRIORITY SCHEDULING
+			 ===================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+In thread.h, the following variables are added to the thread struct:
+
+   int base_priority;
+   -线程的原始优先级
+
+   struct list locks;
+   -线程获得的锁的队列
+
+   struct lock *lock_waiting;
+   -线程正在等待的锁
+
+In synch.h, the following variables are added to the lock struct:
+
+   struct list_elem elem;
+   -优先级捐献列表元素
+
+   int max_priority;
+   -当前锁中线程的最大优先级
+
+>> B2: Explain the data structure used to track priority donation.
+>> Use ASCII art to diagram a nested donation.  (Alternately, submit a
+>> .png file.)
+
+A, B, C are locks
+H1, H2, M, L are threads
+
+    A
+H1 --->    C
+H2 ---> M ---> L
+    B
+
+M's donation list: H1, H2
+L's donation list: M
+
+M's wait on lock: C
+L's wait on lock: NULL
+
+M's current donated priority is max(H1, H2, M).
+L's current donated priority is max(L, M).
+
+---- ALGORITHMS ----
+
+>> B3: How do you ensure that the highest priority thread waiting for
+>> a lock, semaphore, or condition variable wakes up first?
+
+在线程等待队列，信号量等待队列，条件等待队列中都实现了优先级队列，可以保证
+第一个线程就是需要运行的线程
+
+>> B4: Describe the sequence of events when a call to lock_acquire()
+>> causes a priority donation.  How is nested donation handled?
+
+1) 当前线程更新当前锁的状态
+2) 若锁已经被占有，将当前线程的lock_waiting设为此锁，并递归捐献优先级
+3) 拿到锁后，清空当前线程的lock_waiting，将此锁加入此线程的locks列表
+
+>> B5: Describe the sequence of events when lock_release() is called
+>> on a lock that a higher-priority thread is waiting for.
+
+1) 锁的拥有者被设为空
+2) 线程的优先级被设为当前locks列表中的最高优先级，否则设为原始优先级
+
+---- SYNCHRONIZATION ----
+
+>> B6: Describe a potential race in thread_set_priority() and explain
+>> how your implementation avoids it.  Can you use a lock to avoid
+>> this race?
+
+需要关闭中断。因为在设置优先级时若被中断则可能导致优先级出错。由于每4个
+ticks都要更新线程优先级，所以不能再中断处理程序中拿锁
+
+---- RATIONALE ----
+
+>> B7: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+这种设计在每个锁中保存最高优先级，便于获取也不容易导致不同线程间优先级
+数据的不一致
+
+			  ADVANCED SCHEDULER
+			  ==================
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+In thread.h, the following variables are added to the thread struct:
+
+   int nice;
+   - The thread's current nice value
+
+   fixed_t recent_cpu;
+   - The thread's most recently calculated recent_cpu value
+
+In thread.c, the following global variable is added:
+
+   fixed_t load_avg;
+   - The system's most recently calculated load average value
+
+---- ALGORITHMS ----
+
+>> C2: Suppose threads A, B, and C have nice values 0, 1, and 2.  Each
+>> has a recent_cpu value of 0.  Fill in the table below showing the
+>> scheduling decision and the priority and recent_cpu values for each
+>> thread after each given number of timer ticks:
+
+Assume time slice = 4 ticks.
+
+timer  recent_cpu    priority   thread
+ticks   A   B   C   A   B   C   to run    ready list
+-----  --  --  --  --  --  --   ------    ----------
+ 0     0   0   0   63  61  59     A          B, C
+ 4     4   0   0   62  61  59     A          B, C
+ 8     8   0   0   61  61  59     B          A, C
+12     8   4   0   61  60  59     A          B, C
+16     12  4   0   60  60  59     B          A, C
+20     12  8   0   60  59  59     A          C, B
+24     16  8   0   59  59  59     C          B, A
+28     16  8   4   59  59  58     B          A, C
+32     16  12  4   59  58  58     A          C, B
+36     20  12  4   58  58  58     C          B, A
+
+>> C3: Did any ambiguities in the scheduler specification make values
+>> in the table uncertain?  If so, what rule did you use to resolve
+>> them?  Does this match the behavior of your scheduler?
+
+Yes, it is unclear if two threads have equal priority, which thread is
+supposed to run. I used the following rules:
+1) If the running thread has the highest priority and so does a ready
+thread and the running thread reached its time slice, the running thread
+continues to run. This is equivalent to all highest priority threads
+running round robin.
+2) If the scheduler has to choose between multiple ready threads, it
+chooses the one that has been run the least recently (i.e. placed first
+on the ready list).
+
+This behavior matches my scheduler, as can be seen in test_max_priority().
+
+>> C4: How is the way you divided the cost of scheduling between code
+>> inside and outside interrupt context likely to affect performance?
+
+Due to the precise nature in which the scheduler variables needed to be
+updated, most of the computation needs to be done within the interrupt
+handler. However, I found that the currently running thread's priority
+only needs to be updated every 4 ticks, as it is the only thread that
+changes values of recent_cpu. Every second, however, the load average,
+recent_cpu and priority has to be recalculated over all threads, which is
+expensive. Thus, for a system with a lot of threads, this may be an
+inadvisable scheduling algorithm as it is likely to affect performance.
+
+The only computation done outside the interrupt handler is when resetting
+the nice value, but the interrupts have to be turned off. This is because
+resetting nice also changes the priotity, which is read / written in the
+interrupt handler.
+
+---- RATIONALE ----
+
+>> C5: Briefly critique your design, pointing out advantages and
+>> disadvantages in your design choices.  If you were to have extra
+>> time to work on this part of the project, how might you choose to
+>> refine or improve your design?
+
+Advantages:
+- Simple to understand since no locking of thread variables (only turn off
+interrupts).
+- Minimal adding of extra variables, kernel threads remain relatively
+small. Also makes for easier readability.
+
+Disadvantages:
+- Performance suffers due to turning off interrupts instead of locking
+variables.
+- Ordered inserting and sorting lists takes O(n) and O(n log n)
+respectively. Using binary tree / other more efficient data structures
+may be needed. (Also, bad caching in linked lists)
+
+To refine my design, I would implement the following features:
+- Automatic deadlock detection
+
+This is equivalent to finding cycles in the lock donation graph, which is
+iterated through in the donate_priority function. A maximum iteration
+depth of 8 is set in case there is a deadlock cycle (without a depth
+parameter, this would cause an infinite loop).
+
+What would be optimal is to detect deadlock cycles and lower all the
+deadlocked threads priorities to PRI_MIN / kill the threads.
+
+- Detect overflows in fixed_point.h
+
+The values for priorities and nice are clamped, but the values for
+recent_cpu and load_avg are not. Hence, this leaves the possibility for
+overflow, which I currently do not check for. To be correct, the OS needs
+to check for this.
+
+- Use locks for variables instead of turning off interrupts (if possible)
+
+Since most variables I introduced are used / written to in the interrupt
+handler, most of my synchronization is essentially done via turning off
+interrupts. To be correct and improve the speed of the system, a detailed
+analysis of variables and their reads / writes needs to be done in order
+to implement locks on variables where possible.
+
+>> C6: The assignment explains arithmetic for fixed-point math in
+>> detail, but it leaves it open to you to implement it.  Why did you
+>> decide to implement it the way you did?  If you created an
+>> abstraction layer for fixed-point math, that is, an abstract data
+>> type and/or a set of functions or macros to manipulate fixed-point
+>> numbers, why did you do so?  If not, why not?
+
+I implemented fixed-point math in a header file. The conversions between
+integers and fixed-point and arithmetic was abstracted away in this
+file. I used the standard functions as described in the Pintos
+documentation and called these functions in my mlqfs calculation functions
+in thread.c. Abstracting the fixed-point functions allowed for better
+readability when calculating the mlqfs thread.c functions.
+
+

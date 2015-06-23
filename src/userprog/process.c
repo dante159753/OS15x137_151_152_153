@@ -79,6 +79,7 @@ start_process (void *file_name_)
     {
       thread_current()->cp->load = LOAD_FAIL;
     }
+  sema_up(&thread_current()->cp->load_sema);
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
@@ -117,9 +118,9 @@ process_wait (tid_t child_tid UNUSED)
       return ERROR;
     }
   cp->wait = true;
-  while (!cp->exit)
+  if (!cp->exit)
     {
-      barrier();
+      sema_down(&cp->exit_sema);
     }
   int status = cp->status;
   remove_child_process(cp);
@@ -140,10 +141,12 @@ process_exit (void)
   remove_child_processes();
 
   // Set exit value to true in case killed by the kernel
-  if (thread_alive(cur->parent))
+  if (thread_alive(cur->parent) && cur->cp)
     {
       cur->cp->exit = true;
+      sema_up(&cur->cp->exit_sema);
     }
+  file_close(cur->executable);
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
@@ -281,6 +284,8 @@ load (const char *file_name, void (**eip) (void), void **esp,
       printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
+  file_deny_write(file);
+  t->executable = file;
 
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -365,7 +370,10 @@ load (const char *file_name, void (**eip) (void), void **esp,
 
  done:
   /* We arrive here whether the load is successful or not. */
+  if (!success)
+    {
   file_close (file);
+    }
   return success;
 }
 
@@ -500,6 +508,10 @@ setup_stack (void **esp, const char* file_name, char** save_ptr)
 
   char *token;
   char **argv = malloc(DEFAULT_ARGV*sizeof(char *));
+  if (!argv)
+    {
+      return false;
+    }
   int i, argc = 0, argv_size = DEFAULT_ARGV;
 
   // Push args onto stack
@@ -514,6 +526,10 @@ setup_stack (void **esp, const char* file_name, char** save_ptr)
 	{
 	  argv_size *= 2;
 	  argv = realloc(argv, argv_size*sizeof(char *));
+	  if (!argv)
+	    {
+	      return false;
+	    }
 	}
       memcpy(*esp, token, strlen(token) + 1);
     }
@@ -565,4 +581,53 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+int process_add_file (struct file *f)
+{
+  struct process_file *pf = malloc(sizeof(struct process_file));
+  if (!pf)
+    {
+      return ERROR;
+    }
+  pf->file = f;
+  pf->fd = thread_current()->fd;
+  thread_current()->fd++;
+  list_push_back(&thread_current()->file_list, &pf->elem);
+  return pf->fd;
+}
+struct file* process_get_file (int fd)
+{
+  struct thread *t = thread_current();
+  struct list_elem *e;
+  for (e = list_begin (&t->file_list); e != list_end (&t->file_list);
+       e = list_next (e))
+        {
+          struct process_file *pf = list_entry (e, struct process_file, elem);
+          if (fd == pf->fd)
+	    {
+	      return pf->file;
+	    }
+        }
+  return NULL;
+}
+void process_close_file (int fd)
+{
+  struct thread *t = thread_current();
+  struct list_elem *next, *e = list_begin(&t->file_list);
+  while (e != list_end (&t->file_list))
+    {
+      next = list_next(e);
+      struct process_file *pf = list_entry (e, struct process_file, elem);
+      if (fd == pf->fd || fd == CLOSE_ALL)
+	{
+	  file_close(pf->file);
+	  list_remove(&pf->elem);
+	  free(pf);
+	  if (fd != CLOSE_ALL)
+	    {
+	      return;
+	    }
+	}
+      e = next;
+    }
 }

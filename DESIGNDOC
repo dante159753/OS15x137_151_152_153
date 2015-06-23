@@ -1,0 +1,293 @@
+		     +--------------------------+
+       	     |			CS 140			|
+		     | PROJECT 2: USER PROGRAMS	|
+		     | 	   DESIGN DOCUMENT     	|
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+程栋	10132510137
+王彦朝	10132510151
+尹学振	10132510152
+祝朝凡	10132510153
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+
+			   ARGUMENT PASSING
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+修改了以下函数的定义：
+
+static bool setup_stack (void **esp, const char* file_name, char** save_ptr)
+
+bool load (const char *file_name, void (**eip) (void), void **esp,
+           char **save_ptr)
+
+在其中使用了save_ptr指向参数，并在函数中对参数传递进行了处理
+
+---- ALGORITHMS ----
+
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+
+在setup_stack中实现的参数传递。首先，将参数按照传进来的顺序压到栈里，
+然后用argv保存每一个参数在内存中的地址。因为无法提前知道传进来多少个参数，
+我们使用了malloc来为argv分配空间，并且在argv被填满之后重新为他分配一个
+两倍大的空间。
+
+在保存了每个参数的地址之后，将栈中的单词大小进行字对齐。然后逆序将保存的
+参数的地址推入栈中，然后推入argv,argc和伪造的返回地址。
+
+---- RATIONALE ----
+
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+
+在strtok函数里，前一次解析后的最后一个参数会被函数保存，用于下一次函数调用。
+因此如果有两个进程同时在内核中调用strtok就可能会产生冲突。因此使用strtok_r
+来避免冲突
+
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+
+1. 这可以让shell来分配内存进行参数解析。因为内核的内存比较珍贵，也不能
+增长到太大。如果用户程序内存分配过多那么只是这个用户程序崩溃，而如果
+操作系统内存不足，那么可能会让系统崩溃。
+
+2. 可以让shell提前检查参数，如果有问题可以比较方便的发现并提示用户
+
+			     SYSTEM CALLS
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+修改thread结构体为:
+
+struct list lock_list;
+- 线程持有的锁的列表，在退出后释放
+
+struct list file_list;
+- 线程打开的文件列表
+
+int fd;
+- 文件描述，从2开始（0和1分别是标准输入和标准输出）
+
+struct list child_list;
+- 子进程列表
+
+tid_t parent;
+- 父进程pid
+
+struct child_process* cp;
+- 指向父进程的子进程列表
+
+struct file* executable;
+- 现在运行的可执行文件名，用来防止对它的写
+
+在 syscall.c/h 里:
+
+struct child_process {
+  int pid;   
+  	- 子进程pid
+  int load; 
+  	- 子进程加载状态
+  bool wait;
+  	- 父进程是否在等待子进程
+  bool exit; 
+  	- 子进程是否已经退出 
+  int status; 
+  	- 子进程的退出信息
+  struct semaphore load_sema; 
+  	- load semaphore
+  struct semaphore exit_sema;
+  	- exit semaphore
+  struct list_elem elem;
+  	- 列表元素
+};
+- 子进程列表的元素
+
+struct lock filesys_lock;
+- 文件系统锁
+
+struct process_file {
+  struct file *file; 
+  	-打开的文件的结构体
+  int fd; 
+  	-打开方式
+  struct list_elem elem; 
+  	-列表元素标识
+};
+- 文件列表的元素
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+
+每个进程的每个打开文件的描述符都是独立的。每个进程都有一个文件描述符
+的数量fd，每打开一个文件就增加它。所以文件描述符是在进程中不同的，而不是
+在操作系统中。
+
+---- ALGORITHMS ----
+
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+
+首先，我们在系统调用的处理函数中检查栈指针的有效性（通过检查它是否在
+内核虚拟地址之下且在用户地址空间的开始处之上）。如果指针有效，就检查
+指针指向的数据，找到要调用的系统函数的相关信息。
+
+然后取出附加的参数，并在栈指针增加的时候不断检查他的有效性。对于
+指针类型的参数，都要检查它地址的有效性。对于字符串和缓冲区的参数，
+每个字节要检查有效性。最后通过传进来的参数来调用系统函数，将返回值
+写回eax寄存器中。
+
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+对于2字节的数据，最多的情况是在这两个字节分布于两个页面时，需要查看两
+次页表，最少是1次。
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+
+对于给出的子进程pid，在当前进程的子进程列表中查找此pid，若没找到返回-1，
+如果当前进程已经在等待这个子进程，返回-1。否则这条子进程条目被设为
+等待并让父进程等待子进程结束。当子进程结束时，释放semaphore并设置等待
+标识为真，当前进程将子进程移出子进程列表并返回运行状态。
+
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+我们把处理指针错误的语句放到了多个函数里。一个函数用来检查字符串和
+缓冲字符指针的有效性。另一个函数将指针解引用，并检查每个指针的有效性，
+如果出错则通知用户程序这个错误。
+
+当进程被杀死或是退出时调用thread_exit，如果是用户程序那么再调用process_exit。
+进程退出时，释放掉他的文件列表和子进程列表。然后将可执行文件设为可写，并
+将退出标识设为真方便父进程检查。因为核心进程也使用锁，所以在thread_exit里
+释放掉锁列表
+
+例子：
+当一个用户程序要进行系统调用来写入数据到缓冲区，而缓冲区中有字节是无效的。
+调用时从用户栈里取出调用的编号和参数，检查每个指针的有效性，检查到无效
+的指针后，调用exit(-1)。这时我们把退出状态返回给父进程并调用thread_exit。
+然后释放进程占用的资源和这个线程的空间。
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+当一个进程调用exec时，在他的子进程列表里新建一个元素。将这个子进程的加载
+状态设置为NOT_LOADED并down掉load semaphore。然后当子进程被装载后，将加载
+状态设置为LOAD_FAIL或LOAD_SUCCESS，然后up掉load semaphore。因此父进程可以
+看到加载的状态，如果是LOAD_FAIL则返回-1
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+首先，等待semaphore是一次性的（初始化为0)。因此无论P还是C拿到这个都是一样的。
+
+若P在C退出前调用wait(c),子进程退出标识是假，所以把他加到semaphore的等待列表
+直到C退出。c退出时设置退出标识为真，up掉semaphore，唤醒P。
+如果P在C退出后调用wait(c)，因为退出标志位为真，因此不down semaphore。需要
+释放的资源就是在他父进程里的子进程列表里对应与他的结构体。这些结构体是在
+父进程等待子进程结束之后将其释放的。
+
+如果P在C退出前退出了，C检测到他的父进程退出了，于是不去访问它的子进程列表。
+如果P在没有等待C的情况下比C先退出，那么把P子进程列表中的进程都释放。
+特殊的是最开始的那个进程，他没有父进程，这时thread_alive(parent)总是
+返回true
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+我们将处理内存错误的过程单独抽离出来形成一个函数，这样这个函数可以
+处理多个地方出现的内存错误。这让我们处理页错误更方便。
+
+在用户程序访问无效地址会产生一个页错误中断。如果是用户程序访问的错误的地址
+则调用exit(-1)
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+对每个进程使用独立的文件描述符，这样就可以不用特意消除竞争条件了。
+但是这个方式没有考虑描述符溢出，如果进程打开了很多的文件那么可能会
+溢出，不过这种情况会比较少见。
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+
+>> Any other comments?
